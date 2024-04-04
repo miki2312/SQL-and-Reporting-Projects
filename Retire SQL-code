@@ -1,0 +1,160 @@
+```sql code 
+
+
+DECLARE @BiranaGodina as INT
+SET @BiranaGodina = 2030
+DECLARE @BiraniMesec as INT
+SET @BiraniMesec = 12
+DECLARE @BiraniDatum AS DATE
+SET @BiraniDatum = EOMONTH(DATEFROMPARTS(@BiranaGodina,@BiraniMesec,1))
+DECLARE @rbr as INT
+DECLARE @maxRbr as INT
+DECLARE @tip as varchar(2)
+drop table #tempPomoc
+drop table #tempRBR 
+drop table #tempFinish
+drop table #tempic
+CREATE TABLE #tempFinish (
+    SifRad varchar(6),
+    Ime varchar(100),
+    Prezime varchar(100),
+    Pol char(1),
+    TipRad varchar(2),
+    DatRodj datetime,
+    DatumPocetkaStaza datetime,
+    UkupniStazdoBiranogDatuma int,
+    RadniStazDANASUMesecima int,
+    STAZGODINE int,
+    STAZMESECI int,
+    STAZDANA int,
+    ZivotUMesecima int,
+    StatusPenzije varchar(50)
+);
+DECLARE @BiranaPenzija AS VARCHAR(MAX)
+SET @BiranaPenzija = 'PP,SP';
+select ROW_NUMBER() OVER (ORDER BY tab.Item) row_num, tab.Item 
+into #tempRBR
+from (select Item from dbo.ufnSplit (@BiranaPenzija, ',')) as tab
+set @maxRbr = (select max(row_num) from #tempRBR)
+set @rbr = (select min(row_num) from #tempRBR)
+while (@rbr <= @maxRbr)
+begin
+    set @tip = (select Item from #tempRBR where row_num = @rbr)
+    INSERT INTO #tempFinish
+    (
+        SifRad,
+        Ime,
+        Prezime,
+        Pol,
+        TipRad,
+        DatRodj,
+        DatumPocetkaStaza,
+        UkupniStazdoBiranogDatuma,
+        RadniStazDANASUMesecima,
+        STAZGODINE,
+        STAZMESECI,
+        STAZDANA,
+        ZivotUMesecima,
+        StatusPenzije
+    )
+    SELECT
+        SifRad,
+        Ime,
+        Prezime,
+        Pol,
+        TipRad,
+        DatRodj,
+        DATEADD(DAY, -StazTekD, DATEADD(MONTH, -StazTekM, DATEADD(YEAR, -StazTekG, GETDATE()))) AS DatumPocetkaStaza,
+        DATEDIFF(MONTH, DATEADD(MONTH, -((StazTekG)*12 + StazTekM), GETDATE()), @BiraniDatum) AS UkupniStazdoBiranogDatuma,
+        ((StazTekG)*12 + StazTekM) AS RadniStazDANASUMesecima,
+        Radnik.StazTekG AS STAZGODINE,
+        Radnik.StazTekM AS STAZMESECI,
+        Radnik.StazTekD AS STAZDANA,
+        DATEDIFF(MONTH, Radnik.DatRodj, @BiraniDatum) AS ZivotUMesecima,
+        CASE
+            WHEN @tip = 'SP'
+            THEN
+                CASE
+                    WHEN DATEDIFF(MONTH, DATEADD(DAY, -StazTekD, DATEADD(MONTH, -StazTekM, DATEADD(YEAR, -StazTekG, GETDATE()))), @BiraniDatum) >= 45*12
+                        THEN 'Starosna penzija sa 45 godina staza'
+                    WHEN Radnik.Pol = 'Z' AND DATEDIFF(MONTH, DATEADD(DAY, -StazTekD, DATEADD(MONTH, -StazTekM, DATEADD(YEAR, -StazTekG, GETDATE()))), @BiraniDatum) >= 15*12 AND
+                         (
+                             (@BiranaGodina < 2032 AND DATEDIFF(MONTH, Radnik.DatRodj, @BiraniDatum) >= (63*12 + 6 + (@BiranaGodina - 2023)*2))
+                             OR
+                             (@BiranaGodina >= 2032 AND DATEDIFF(MONTH, Radnik.DatRodj, @BiraniDatum) >= 65*12)
+                         )
+                        THEN 'Starosna penzija ZENSKA'
+                    WHEN Radnik.Pol = 'M' AND DATEDIFF(MONTH, DATEADD(DAY, -StazTekD, DATEADD(MONTH, -StazTekM, DATEADD(YEAR, -StazTekG, GETDATE()))), @BiraniDatum) >= 15*12 AND DATEDIFF(MONTH, Radnik.DatRodj, @BiraniDatum) >= 65*12
+                        THEN 'Starosna penzija MUSKA'
+                    ELSE NULL
+                END
+            WHEN @tip = 'PP'
+            THEN
+                CASE
+                    WHEN Radnik.Pol = 'M' AND DATEDIFF(MONTH, DATEADD(DAY, -StazTekD, DATEADD(MONTH, -StazTekM, DATEADD(YEAR, -StazTekG, GETDATE()))), @BiraniDatum) >= 40*12 AND DATEDIFF(MONTH, Radnik.DatRodj, @BiraniDatum) >= 60*12
+                        THEN 'Prevremena MUSKA'
+                    WHEN Radnik.Pol = 'Z' AND DATEDIFF(MONTH, DATEADD(DAY, -StazTekD, DATEADD(MONTH, -StazTekM, DATEADD(YEAR, -StazTekG, GETDATE()))), @BiraniDatum) >= 40*12 AND (@BiranaGodina > 2023 AND DATEDIFF(MONTH, Radnik.DatRodj, @BiraniDatum) >= 60*12)
+                        THEN 'Prevremena ZENSKA'
+                    ELSE NULL
+                END
+            ELSE NULL
+        END AS StatusPenzije
+    FROM Radnik
+    set @rbr = @rbr+1
+end
+SELECT *
+INTO #tempPomoc
+FROM #tempFinish
+WHERE TipRad IN ('NE', 'ON', 'OD');
+SELECT SifRad, Ime, Prezime, Pol, DatRodj, DatumPocetkaStaza, UkupniStazdoBiranogDatuma, RadniStazDANASUMesecima, STAZGODINE, STAZMESECI, STAZDANA, ZivotUMesecima, StatusPenzije,
+    CASE
+        WHEN StatusPenzije = 'Starosna penzija MUSKA' 
+            THEN 
+                CASE
+                    WHEN (15*12 -
+
+ DATEDIFF(MONTH, DatumPocetkaStaza, @BiraniDatum)) > (65*12 - DATEDIFF(MONTH, DatRodj, @BiraniDatum))
+                        THEN DATEADD(MONTH, 15*12, DatumPocetkaStaza)
+                    ELSE DATEADD(MONTH, 65*12, DatRodj)
+                END
+        WHEN StatusPenzije = 'Starosna penzija ZENSKA'
+            THEN
+                CASE
+                    WHEN @BiranaGodina < 2032 THEN 
+                        CASE
+                            WHEN (15*12 - DATEDIFF(MONTH, DatumPocetkaStaza, @BiraniDatum)) > (63*12+6+(@BiranaGodina - 2023)*2 - DATEDIFF(MONTH, DatRodj, @BiraniDatum))
+                                THEN DATEADD(MONTH, 15*12, DatumPocetkaStaza)
+                            ELSE DATEADD(MONTH, 63*12+6+(@BiranaGodina - 2023)*2, DatRodj)
+                        END
+                    ELSE
+                        CASE
+                            WHEN (15*12 - DATEDIFF(MONTH, DatumPocetkaStaza, @BiraniDatum)) > (63*12+6+(@BiranaGodina - 2023)*2 - DATEDIFF(MONTH, DatRodj, @BiraniDatum))
+                                THEN DATEADD(MONTH, 15*12, DatumPocetkaStaza)
+                            ELSE DATEADD(MONTH, 65*12, DatRodj)
+                        END
+                END
+        WHEN StatusPenzije = 'Starosna penzija sa 45 godina staza' 
+            THEN DATEADD(YEAR, 45, DatumPocetkaStaza)
+        WHEN StatusPenzije = 'Prevremena MUSKA'
+            THEN 
+                CASE
+                    WHEN (40*12 - DATEDIFF(MONTH, DatumPocetkaStaza, @BiraniDatum)) > (60*12 - DATEDIFF(MONTH, DatRodj, @BiraniDatum))
+                        THEN DATEADD(MONTH, 40*12, DatumPocetkaStaza)
+                    ELSE DATEADD(MONTH, 60*12, DatRodj)
+                END
+        WHEN StatusPenzije = 'Prevremena ZENSKA'
+            THEN 
+                CASE
+                    WHEN (40*12 - DATEDIFF(MONTH, DatumPocetkaStaza, @BiraniDatum)) > (60*12 - DATEDIFF(MONTH, DatRodj, @BiraniDatum))
+                        THEN DATEADD(MONTH, 40*12, DatumPocetkaStaza)
+                    ELSE DATEADD(MONTH, 60*12, DatRodj)
+                END
+    END AS NoviDatum
+INTO #tempic
+FROM #tempPomoc
+WHERE StatusPenzije IS NOT NULL
+SELECT *,
+    CONVERT(varchar, NoviDatum, 103) AS DatumPenzije -- sifra za datum onako DD/MM/YYYY
+FROM #tempic
+WHERE YEAR(NoviDatum) = @BiranaGodina
+```
